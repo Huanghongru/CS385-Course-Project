@@ -14,7 +14,7 @@ class pLSTM(object):
     """
     def __init__(self, name, units=64, activation='tanh', 
             recurrent_activation='hard_sigmoid',
-            batch_size=64, epochs = 64,
+            batch_size=64, epochs = 16,
             dna_vec_size=100, w2v_window=5, device_id="1"):
         """
         Init some hyperparameters
@@ -37,7 +37,7 @@ class pLSTM(object):
         
         self.device_id = device_id
 
-    def train_word2vec(self, window, size):
+    def train_word2vec(self):
         """
         """
         sentences = []
@@ -48,8 +48,8 @@ class pLSTM(object):
             print("load and segment {} done.".format(p))
 
         model = Word2Vec(sentences, size=self.dna_vec_size,
-                         window=self.w2v_window)
-        model.save('model/w2v/word2vec_3seg.w2v')
+                         window=self.w2v_window, min_count=1)
+        model.save('model/w2v/word2vec_3seg_new.w2v')
         print("word2vec process done.")
 
     def select_data(self, datasets, w2v='word2vec_3seg.w2v', verbose=False):
@@ -73,7 +73,7 @@ class pLSTM(object):
         raw_binding = []
         w2v = 'model/w2v/'+w2v
         for dataset in datasets:
-            d, b = load_raw_data(dataset)
+            d, b = load_raw_data(dataset, predict_mode=True, shuffle=False)
             raw_dna_seq.extend(d)
             raw_binding.extend(b)
         dna_seqs = [dna_segmentation(ds) for ds in raw_dna_seq]
@@ -89,8 +89,11 @@ class pLSTM(object):
         dna_vecs = np.array(dna_vecs)
 
         self.data = dna_vecs
-        self.label = np.eye(2)[np.array(raw_binding).reshape(-1)]
-        # self.label = keras.utils.np_utils.to_categorical(raw_binding, 2)
+        if raw_binding:
+            self.label = np.eye(2)[np.array(raw_binding).reshape(-1)]
+            # self.label = keras.utils.np_utils.to_categorical(raw_binding, 2)
+        else:
+            self.label = []
         print("select data %s for %s model completed!" % (datasets, self.name))
 
     def get_train_test_data(self, fraction=0.8, verbose=False):
@@ -139,8 +142,7 @@ class pLSTM(object):
             self.model = keras.models.Sequential()
             self.model.add(keras.layers.LSTM(units=self.units,
                                              activation=self.activation,
-                                             input_shape=(100, 100),
-                                             recurrent_dropout=0.5))
+                                             input_shape=(100, 100)))
             self.model.add(keras.layers.Dense(2, activation='softmax'))
             
             self.model.compile(loss='categorical_crossentropy',
@@ -159,11 +161,9 @@ class pLSTM(object):
                                optimizer='adam',
                                metrics=['accuracy'])
         elif model_id==2:
-            self.units = 256
             self.model = keras.models.Sequential()
             self.model.add(keras.layers.LSTM(units=self.units,
                                              activation=self.activation,
-                                             recurrent_dropout=0.75,
                                              input_shape=(100, 100)))
             self.model.add(keras.layers.Dense(32, activation='tanh'))
             self.model.add(keras.layers.Dropout(rate=0.5))
@@ -180,7 +180,7 @@ class pLSTM(object):
         if verbose:
             self.model.summary()
 
-    def train(self, save_model=True, validation_ratio=0.1, verbose=1):
+    def train(self, save_model=True, validation_ratio=0.1, verbose=1, fraction=0.8):
         """
         Train the model with given training dataset.
         
@@ -195,17 +195,17 @@ class pLSTM(object):
         self.callbacks = keras.callbacks.TensorBoard(log_dir='./tune-logs/%s' % self.name,
                                                      batch_size=self.batch_size,
                                                      write_images=True)
-        self.get_train_test_data(verbose=True, fraction=0.8)
+        self.get_train_test_data(verbose=True, fraction=fraction)
         self.model.fit(self.train_data, self.train_label,
                        batch_size = self.batch_size,
-                       nb_epoch = self.epochs,
+                       epochs = self.epochs,
                        validation_split=validation_ratio,
                        callbacks=[self.callbacks],
                        verbose=verbose)
         if save_model:
             self.model.save('model/lstm/%s.h5' % self.name)
     
-    def evaluate(self, trained=False):
+    def evaluate(self, trained=False, fraction=0.8):
         """
         Evaluate the model with given test dataset.
         Parameters:
@@ -215,30 +215,38 @@ class pLSTM(object):
         os.environ["CUDA_VISIBLE_DEVICES"] = self.device_id
         if trained:
             self.load_trained_model()
-            self.get_train_test_data()
-        test_loss, test_acc = self.model.evaluate(self.test_data, self.test_label)
-        print("%s model - test loss:%f\ttest acc:%f" % (self.name, test_loss, test_acc))
-
-        predict_result = self.model.predict(self.test_data, verbose=1)
-        print("roc auc score: %f" % roc_auc_score(self.test_label[:,1], predict_result[:,1]))
+            self.get_train_test_data(fraction=fraction)
+        test_loss, test_acc = self.model.evaluate(self.test_data, self.test_label, verbose=0)
+        predict_result = self.model.predict(self.test_data, verbose=0)
+        roc_auc = roc_auc_score(self.test_label[:,1], predict_result[:,1])
+        print("%s model\ttest loss:%f\ttest acc:%f\troc-auc:%f" % (self.name, 
+                                               test_loss, test_acc,roc_auc))
         return test_loss, test_acc
 
     # TODO: should get input data outside the function.
-    def predict(self, threashold=0.8):
+    def predict(self, threashold=0.5):
         """
         """
         os.environ["CUDA_VISIBLE_DEVICES"] = self.device_id
         self.load_trained_model()
-        self.get_train_test_data(0.8, verbose=True)
-        print(self.test_label)
+        self.get_train_test_data(fraction=0, verbose=False)
+        print(self.test_data.shape, self.train_data.shape)
+        # print(self.test_label)
         predict_result = self.model.predict(self.test_data, verbose=1)
+        print(predict_result[:, 1])
         
         # turn probability result to index result.
-        _pre_result = (predict_result > threashold).astype(np.float32)
-        print(_pre_result)
-        print("roc socre: %s" % (roc(self.test_label, _pre_result),))
+        # _pre_result = (predict_result > threashold).astype(np.float32)
+        # print(_pre_result)
+        # print("roc socre: %s" % (roc(self.test_label, _pre_result),))
 
-        print("roc auc socre: %f" % roc_auc_score(self.test_label[:,1], predict_result[:,1]))
+        # print("roc auc socre: %f" % roc_auc_score(self.test_label[:,1], predict_result[:,1]))
+
+        with open('RNA_result/%s' % self.name, 'w') as f:
+            with open('RNA_testset/%s' % self.name, 'r') as tf:
+                test_datas = tf.readlines()
+                for i in range(len(test_datas)):
+                    f.write(test_datas[i][:-1]+'\t'+str(int(predict_result[i,1]>threashold))+'\t'+str(predict_result[i,1])+'\n')
 
 
 class LSTM_wrapper(object):
@@ -256,7 +264,7 @@ class LSTM_wrapper(object):
 
         for prot in self.proteins:
             self.models[prot] = pLSTM(prot)
-            self.models[prot].select_data([prot])
+            self.models[prot].select_data([prot], w2v='word2vec_3seg_new.w2v')
 
     def train(self, verbose=0):
         """
@@ -266,17 +274,25 @@ class LSTM_wrapper(object):
         for prot in self.proteins:
             self.models[prot].create_model()
             print("Create model for %s success" % prot)
-            self.models[prot].train(verbose=verbose) 
+            self.models[prot].train(verbose=verbose, fraction=1,
+                                    validation_ratio=0) 
             print("%s model has completed training." % prot)
-            self.models[prot].evaluate()
+            # self.models[prot].evaluate()
         print("All models training process has been completed!")
 
-    def evaluate(self):
+    def evaluate(self, fraction):
         """
         """
         for prot in self.proteins:
-            print("evaluate %s model:" % prot)
-            self.models[prot].evaluate(trained=True)
+            # print("evaluate %s model:" % prot)
+            self.models[prot].evaluate(trained=True, fraction=fraction)
+
+    def predict(self):
+        """
+        """
+        for prot in self.proteins:
+            print("%s model predict:" % prot)
+            self.models[prot].predict()
 
     # TODO: test: one dna sequence - multiple class in pLSTM
     # TODO: why evalutation accuracy differ in training procedure
@@ -302,15 +318,29 @@ def main():
 
     if args.mode == "train":
         model = pLSTM(args.model_name, device_id=args.device_id)
-        model.select_data([args.data_name])
+        model.train_word2vec();
+        model.select_data([args.data_name], w2v='word2vec_3seg_new.w2v')
         model.create_model()
-        model.train()
-        model.evaluate()
+        model.train(fraction=1)
+        # model.evaluate()
 
     if args.mode == "predict":
         model = pLSTM(args.model_name, device_id=args.device_id)
-        model.select_data([args.data_name])
+        model.select_data([args.data_name], w2v='word2vec_3seg_new.w2v')
         model.predict()
+
+    if args.mode == "batch_train":
+        models = LSTM_wrapper()
+        models.train(verbose=1)
+
+    if args.mode == "batch_test":
+        models = LSTM_wrapper()
+        models.evaluate(fraction=0)
+
+    if args.mode == "batch_predict":
+        models = LSTM_wrapper()
+        models.predict()
+
 
 if __name__ == '__main__':
     main()

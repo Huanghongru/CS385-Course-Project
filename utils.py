@@ -11,7 +11,7 @@ PROTEIN = ['AGO2', 'AGO1', 'AGO3', 'ALKBH5', 'AUF1', 'C17ORF85',
         'TAF15', 'TDP43', 'TIA1', 'TIAL1', 'TNRC6', 'U2AF65', 
         'WTAP', 'ZC3H7B']
 
-def load_raw_data(prot, shuffle=True):
+def load_raw_data(prot, train_mode=False, predict_mode=False, shuffle=True):
     """
     Load raw data from training dataset.
 
@@ -28,13 +28,20 @@ def load_raw_data(prot, shuffle=True):
     """
     dna_seq = []
     binding = []
-    data_file = os.path.join(DATA_DIR, prot, 'train')
+    # For old training data:
+    # data_file = os.path.join(DATA_DIR, prot, 'train')
+    # For new training data:
+    data_file = os.path.join("RNA_testset", prot)
     with open(data_file, 'r') as f:
         datas = f.readlines()
         if shuffle:
             random.shuffle(datas)
-        dna_seq.extend(data.split()[0] for data in datas)
-        binding.extend(eval(data.split()[1]) for data in datas)
+        if train_mode:
+            dna_seq.extend(data.split()[0] for data in datas)
+            binding.extend(eval(data.split()[1]) for data in datas)
+        if predict_mode:
+            dna_seq.extend(data.split()[0] for data in datas)
+            binding.extend([])
     return dna_seq, binding
          
 def dna_segmentation(dna_seq, seg=3):
